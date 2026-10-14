@@ -6,7 +6,7 @@
 ## 快速使用
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/<你的用户名>/x-tunnel-installer/main/install.sh)
+bash <(curl -sL https://raw.githubusercontent.com/fsyllkn/x-tunnel-installer/main/install.sh)
 ```
 
 ## 功能
