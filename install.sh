@@ -199,12 +199,30 @@ info "x-tunnel 已安装到 ${XTUNNEL_BIN}"
 # ==================== Part 2: Install cloudflared ====================
 header "第二步: 安装 cloudflared"
 
-CLOUDFLARED_BIN="/usr/bin/cloudflared"
+if command -v cloudflared &>/dev/null; then
+    info "cloudflared 已安装 ($(cloudflared --version 2>/dev/null || echo '未知版本'))，跳过安装"
+elif command -v apt-get &>/dev/null; then
+    # Debian / Ubuntu — 使用官方 apt 源安装
+    info "检测到 apt 包管理器，使用 Cloudflare 官方源安装..."
 
-if [[ -f "$CLOUDFLARED_BIN" ]]; then
-    info "cloudflared 已存在于 ${CLOUDFLARED_BIN}，跳过安装"
+    # 添加 Cloudflare GPG 密钥
+    sudo mkdir -p --mode=0755 /usr/share/keyrings
+    curl -fsSL https://pkg.cloudflare.com/cloudflare-public-v2.gpg | sudo tee /usr/share/keyrings/cloudflare-public-v2.gpg >/dev/null
+    info "GPG 密钥已添加"
+
+    # 添加 apt 源
+    echo 'deb [signed-by=/usr/share/keyrings/cloudflare-public-v2.gpg] https://pkg.cloudflare.com/cloudflared any main' | sudo tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
+    info "apt 源已添加"
+
+    # 安装 cloudflared
+    sudo apt-get update -qq
+    sudo apt-get install -y cloudflared
+    info "cloudflared 已通过 apt 安装完成（后续可通过 apt upgrade 更新）"
 else
-    info "正在安装 cloudflared..."
+    # 非 Debian 系统 — 回退到直接下载二进制文件
+    warn "未检测到 apt，回退为直接下载二进制文件..."
+
+    CLOUDFLARED_BIN="/usr/bin/cloudflared"
     case "$ARCH" in
         amd64) CF_ARCH="amd64" ;;
         arm64) CF_ARCH="arm64" ;;
@@ -228,6 +246,10 @@ else
     chmod +x "$CLOUDFLARED_BIN"
     info "cloudflared 已安装到 ${CLOUDFLARED_BIN}"
 fi
+
+# 确认 cloudflared 路径
+CLOUDFLARED_BIN=$(command -v cloudflared)
+info "cloudflared 路径: ${CLOUDFLARED_BIN}"
 
 # ==================== Part 3: Configure cf-tunnel.service ====================
 header "第三步: 配置 cf-tunnel.service (cloudflared)"
