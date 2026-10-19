@@ -91,10 +91,10 @@ generate_password() {
 header "第一步: 安装 x-tunnel 内核"
 
 XTUNNEL_BIN="/usr/local/bin/x-tunnel"
-RELEASE_API="https://api.github.com/repos/caichengle666/x-tunnel/releases/latest"
+# Pinned to the build that matches the user-provided working amd64 binary.
+RELEASE_TAG="verified-d219c34"
 
 if [[ -n "${XTUNNEL_BINARY:-}" ]]; then
-    # Use a locally downloaded binary from this repository's verified build artifact.
     if [[ ! -f "$XTUNNEL_BINARY" ]]; then
         error "指定的 x-tunnel 二进制文件不存在: ${XTUNNEL_BINARY}"
         exit 1
@@ -102,117 +102,36 @@ if [[ -n "${XTUNNEL_BINARY:-}" ]]; then
     EXTRACTED_BIN="$XTUNNEL_BINARY"
     info "使用本地 x-tunnel 二进制文件: ${EXTRACTED_BIN}"
 else
-    info "正在从 GitHub 获取最新版本信息..."
+    case "$ARCH" in
+        amd64) EXPECTED_SHA256="ae3a79a4d2a6a8d7e1377afb2e022c5ed75b0157a694fb6aead9d86ab873ccc2" ;;
+        arm64) EXPECTED_SHA256="18b08c599c717696f44a540da6af039c5d0efaf4112679d2a04c9122d077f047" ;;
+        *)
+            error "已验证的 Release 暂无 ${ARCH} 产物；请自行构建并通过 XTUNNEL_BINARY 指定本地二进制"
+            exit 1
+            ;;
+    esac
 
-    # Get latest release tag
-    if command -v curl &>/dev/null; then
-        LATEST_JSON=$(curl -sL "$RELEASE_API")
-    elif command -v wget &>/dev/null; then
-        LATEST_JSON=$(wget -qO- "$RELEASE_API")
-    else
-        error "需要 curl 或 wget，请先安装"
+    if ! command -v sha256sum &>/dev/null; then
+        error "需要 sha256sum 验证下载的二进制文件"
         exit 1
     fi
-
-    LATEST_TAG=$(echo "$LATEST_JSON" | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/')
-
-    if [[ -z "$LATEST_TAG" ]]; then
-        error "无法获取最新版本号，请检查网络或 GitHub API 限制"
-        echo "$LATEST_JSON" | head -20
-        exit 1
-    fi
-
-    info "最新版本: ${LATEST_TAG}"
-
-    # Construct download URL — adapt the naming pattern to the actual release assets
-    DOWNLOAD_URL=""
-    ASSET_NAMES=(
-        "x-tunnel-${OS}-${ARCH}"
-        "x-tunnel_${OS}_${ARCH}"
-    )
-
-    # Parse all asset download URLs from the release
-    ASSET_URLS=$(echo "$LATEST_JSON" | grep -o '"browser_download_url":\s*"[^"]*"' | sed 's/"browser_download_url":\s*"//;s/"$//')
-
-    if [[ -z "$ASSET_URLS" ]]; then
-        error "未找到任何可下载的资源文件"
-        exit 1
-    fi
-
-    info "可用的资源文件:"
-    echo "$ASSET_URLS" | while read -r url; do
-        echo "  - $(basename "$url")"
-    done
-
-    # Try to match architecture
-    for name in "${ASSET_NAMES[@]}"; do
-        matched_url=$(echo "$ASSET_URLS" | grep -iF "$name" | grep -ivE '\.(sha[0-9]*|md5|sig|txt)([./]|$)' | head -1 || true)
-        if [[ -n "$matched_url" ]]; then
-            DOWNLOAD_URL="$matched_url"
-            break
-        fi
-    done
-
-    # Fallback: require both operating system and architecture.
-    if [[ -z "$DOWNLOAD_URL" ]]; then
-        matched_url=$(echo "$ASSET_URLS" | grep -iF "${OS}" | grep -iF "${ARCH}" | grep -ivE '\.(sha[0-9]*|md5|sig|txt)([./]|$)' | head -1 || true)
-        if [[ -n "$matched_url" ]]; then
-            DOWNLOAD_URL="$matched_url"
-        fi
-    fi
-
-    if [[ -z "$DOWNLOAD_URL" ]]; then
-        error "未找到适配 ${OS}-${ARCH} 的二进制文件"
-        error "请手动下载: https://github.com/caichengle666/x-tunnel/releases/tag/${LATEST_TAG}"
-        exit 1
-    fi
-
-    FILENAME=$(basename "$DOWNLOAD_URL")
-    info "即将下载: ${FILENAME}"
-    info "下载地址: ${DOWNLOAD_URL}"
-
-    # Download
     TMP_DIR=$(mktemp -d)
     trap 'rm -rf "$TMP_DIR"; if [[ -n "${STAGED_BIN:-}" ]]; then rm -f "$STAGED_BIN"; fi' EXIT
-    TMP_FILE="${TMP_DIR}/${FILENAME}"
-
+    EXTRACTED_BIN="${TMP_DIR}/x-tunnel-linux-${ARCH}"
+    DOWNLOAD_URL="https://github.com/fsyllkn/x-tunnel-installer/releases/download/${RELEASE_TAG}/x-tunnel-linux-${ARCH}"
+    info "下载本项目已验证的 ${ARCH} 构建产物: ${DOWNLOAD_URL}"
     if command -v curl &>/dev/null; then
-        curl -L --progress-bar -o "$TMP_FILE" "$DOWNLOAD_URL"
+        curl -fL --retry 3 --progress-bar -o "$EXTRACTED_BIN" "$DOWNLOAD_URL"
+    elif command -v wget &>/dev/null; then
+        wget --show-progress -O "$EXTRACTED_BIN" "$DOWNLOAD_URL"
     else
-        wget --show-progress -O "$TMP_FILE" "$DOWNLOAD_URL"
+        error "需要 curl 或 wget 下载 x-tunnel"
+        exit 1
     fi
-
-    # Handle compressed files
-    if [[ "$FILENAME" == *.tar.gz ]] || [[ "$FILENAME" == *.tgz ]]; then
-        info "解压 tar.gz 文件..."
-        tar -xzf "$TMP_FILE" -C "$TMP_DIR"
-        EXTRACTED_BIN=$(find "$TMP_DIR" -type f -name "x-tunnel*" ! -name "*.tar.gz" ! -name "*.tgz" | head -1)
-        if [[ -z "$EXTRACTED_BIN" ]]; then
-            EXTRACTED_BIN=$(find "$TMP_DIR" -type f -executable | head -1)
-        fi
-        if [[ -z "$EXTRACTED_BIN" ]]; then
-            error "解压后未找到可执行文件"
-            exit 1
-        fi
-    elif [[ "$FILENAME" == *.zip ]]; then
-        info "解压 zip 文件..."
-        unzip -o "$TMP_FILE" -d "$TMP_DIR" >/dev/null
-        EXTRACTED_BIN=$(find "$TMP_DIR" -type f -name "x-tunnel*" ! -name "*.zip" | head -1)
-        if [[ -z "$EXTRACTED_BIN" ]]; then
-            EXTRACTED_BIN=$(find "$TMP_DIR" -type f -executable | head -1)
-        fi
-        if [[ -z "$EXTRACTED_BIN" ]]; then
-            error "解压后未找到可执行文件"
-            exit 1
-        fi
-    elif [[ "$FILENAME" == *.gz ]] && [[ "$FILENAME" != *.tar.gz ]]; then
-        info "解压 gz 文件..."
-        EXTRACTED_BIN="${TMP_DIR}/x-tunnel-extracted"
-        gunzip -c "$TMP_FILE" > "$EXTRACTED_BIN"
-    else
-        # Assume raw binary
-        EXTRACTED_BIN="$TMP_FILE"
-    fi
+    printf '%s  %s\n' "$EXPECTED_SHA256" "$EXTRACTED_BIN" | sha256sum -c - || {
+        error "下载文件 SHA-256 不符，拒绝安装"
+        exit 1
+    }
 fi
 
 # Stage in the destination directory, then rename atomically even if the old binary is running.
@@ -383,12 +302,11 @@ if ! [[ "$XTUNNEL_PORT" =~ ^[0-9]+$ ]] || [[ "$XTUNNEL_PORT" -lt 1 ]] || [[ "$XT
     XTUNNEL_PORT="$DEFAULT_PORT"
 fi
 
-# When the Web GUI shares the tunnel port, it has already registered "/".
-# Use a distinct WebSocket path to avoid a duplicate ServeMux pattern panic.
-DEFAULT_PATH="/tunnel"
+# The verified source has no Web GUI handler; its "/" handler accepts /about as well.
+DEFAULT_PATH="/"
 echo ""
 echo -e "${BOLD}请输入 x-tunnel WebSocket 路径:${NC}"
-echo -e "${YELLOW}  默认路径: ${DEFAULT_PATH}，Cloudflare 路由路径需与此一致${NC}"
+echo -e "${YELLOW}  默认根路径 / 可接收 Cloudflare 转发的 /about 等路径${NC}"
 echo ""
 read -rp "路径 [${DEFAULT_PATH}]: " XTUNNEL_PATH </dev/tty || { error "无法从终端读取 WebSocket 路径"; exit 1; }
 
@@ -396,7 +314,7 @@ if [[ -z "$XTUNNEL_PATH" ]]; then
     XTUNNEL_PATH="$DEFAULT_PATH"
 fi
 
-if ! [[ "$XTUNNEL_PATH" =~ ^(/[A-Za-z0-9._~-]+)+$ ]]; then
+if ! [[ "$XTUNNEL_PATH" =~ ^(/|(/[A-Za-z0-9._~-]+)+)$ ]]; then
     warn "路径格式无效，将使用默认路径 ${DEFAULT_PATH}"
     XTUNNEL_PATH="$DEFAULT_PATH"
 fi
@@ -482,7 +400,7 @@ echo ""
 echo -e "${BOLD}  x-tunnel 配置:${NC}"
 echo -e "  ├─ 监听地址:  ${XTUNNEL_LISTEN_ADDR}"
 echo -e "  ├─ Cloudflare 源站 URL: http://127.0.0.1:${XTUNNEL_PORT}"
-echo -e "  ├─ Cloudflare 公网路径: ${XTUNNEL_PATH}"
+echo -e "  ├─ 本机 WebSocket 路径: ${XTUNNEL_PATH}"
 echo -e "  └─ 认证密码:  ${CYAN}${BOLD}${XTUNNEL_TOKEN}${NC}"
 if [[ "$RANDOM_GENERATED" == true ]]; then
     echo ""

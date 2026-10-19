@@ -71,3 +71,34 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 30
+
+  publish-verified:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: x-tunnel-linux-${{ github.sha }}
+          path: dist/
+      - name: Verify and publish known-good binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cd dist
+          sha256sum -c x-tunnel-linux-amd64.sha256
+          sha256sum -c x-tunnel-linux-arm64.sha256
+          printf '%s  %s\n' ae3a79a4d2a6a8d7e1377afb2e022c5ed75b0157a694fb6aead9d86ab873ccc2 x-tunnel-linux-amd64 | sha256sum -c -
+          printf '%s  %s\n' 18b08c599c717696f44a540da6af039c5d0efaf4112679d2a04c9122d077f047 x-tunnel-linux-arm64 | sha256sum -c -
+          tag=verified-d219c34
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" x-tunnel-linux-{amd64,arm64}{,.sha256} --clobber
+          else
+            gh release create "$tag" x-tunnel-linux-{amd64,arm64}{,.sha256} \
+              --target d219c34fcdfc07c91b3563aadb078381cab8aaa5 \
+              --title 'Verified x-tunnel build (d219c34)' \
+              --notes 'Built from the repository source. Linux amd64 is byte-identical to the user-provided working binary.'
+          fi

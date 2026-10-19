@@ -10,8 +10,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/fsyllkn/x-tunnel-installer/m
 
 ## 功能
 
-- 🔍 自动检测系统架构（amd64/arm64/armv7/armv6 等）
-- 📦 从 [GitHub Releases](https://github.com/caichengle666/x-tunnel/releases) 拉取最新 x-tunnel 内核
+- 🔍 自动检测系统架构；内置已验证的 amd64、arm64 产物
+- 📦 默认从[本项目的已验证 Release](https://github.com/fsyllkn/x-tunnel-installer/releases/tag/verified-d219c34) 下载 x-tunnel，并核对固定 SHA-256；其他架构可通过 `XTUNNEL_BINARY` 指定自行构建的文件
 - ☁️ Debian/Ubuntu 通过 Cloudflare 官方 APT 源安装或更新 cloudflared；其他系统使用官方二进制文件回退
 - ⚙️ 交互式配置两个 systemd 服务：
   - `cf-tunnel.service` — cloudflared tunnel
@@ -25,7 +25,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/fsyllkn/x-tunnel-installer/m
 |--------|------|--------|
 | cloudflared token | Tunnel 认证令牌 | 可跳过，稍后手动填写 |
 | x-tunnel 端口 | 本机监听端口 | `53393` |
-| x-tunnel WebSocket 路径 | WebSocket 接口路径，需与 Cloudflare 公网路由和客户端连接路径一致 | `/tunnel` |
+| x-tunnel WebSocket 路径 | 本机接收 WebSocket 的路径；根路径也能处理 `/about` 等子路径 | `/` |
 | x-tunnel 密码 | 认证密码 | 随机生成 32 位十六进制字符 |
 
 ## Cloudflare Tunnel 配置
@@ -36,7 +36,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/fsyllkn/x-tunnel-installer/m
 http://127.0.0.1:53393
 ```
 
-Cloudflare 公网路由的路径、客户端连接 URL 的路径，必须与安装时填写的 x-tunnel WebSocket 路径一致。默认均为 `/tunnel`，例如客户端使用 `wss://你的域名/tunnel`。如果 Cloudflare 路由要继续使用 `/about`，安装时也把 x-tunnel 路径填为 `/about`，客户端路径也使用 `/about`。
+Cloudflare 后台的 Path 只筛选请求，不会自动去掉或改写路径。若后台路由为 `/about`，客户端使用 `wss://你的域名/about`；默认的服务端根路径 `/` 可以处理该请求，因此安装时直接使用默认值即可。若手动把服务端路径设为 `/about`，它也能处理 `/about`，但不能处理其他路径。本仓库已验证的源码没有单独占用根路径的 Web GUI；此前上游二进制的 Web GUI 行为不能套用到这个构建上。
 
 不要把本机源站 URL 配成 `https://127.0.0.1:53393`：该安装配置在本机使用明文 HTTP，只有公网入口使用 HTTPS。
 
@@ -120,7 +120,7 @@ sha256sum -c x-tunnel-linux-amd64.sha256
 XTUNNEL_BINARY="$(pwd)/x-tunnel-linux-amd64" bash <(curl -fsSL https://raw.githubusercontent.com/fsyllkn/x-tunnel-installer/main/install.sh)
 ```
 
-安装脚本会先验证指定二进制可执行，再原子替换已安装文件。ARM64 请将文件名改为 `x-tunnel-linux-arm64`。若不指定 `XTUNNEL_BINARY`，脚本仍下载上游 `caichengle666/x-tunnel` 的最新 Release；该上游版本在此前的 VPS 测试中无法启动，不应与本仓库构建产物混淆。Actions 产物没有自动发布为 Releases。
+安装脚本会先验证指定二进制可执行，再原子替换已安装文件。ARM64 请将文件名改为 `x-tunnel-linux-arm64`。不指定 `XTUNNEL_BINARY` 时，脚本默认下载本项目固定的已验证 Release，并核对对应 SHA-256。amd64 二进制与你提供的可用文件逐字节一致，大小为 7,282,850 字节（约 6.9 MiB）。
 
 ### 仅替换已安装的内核
 
@@ -137,7 +137,7 @@ systemctl restart cf-x-tunnel.service
 systemctl status cf-x-tunnel.service --no-pager -l
 ```
 
-ARM64 请将文件名改为 `x-tunnel-linux-arm64`。合并后的安装脚本默认在本机以 `ws://127.0.0.1:53393/tunnel` 监听；替换内核后沿用该服务的 `ExecStart` 配置。
+ARM64 请将文件名改为 `x-tunnel-linux-arm64`。安装脚本默认在本机以 `ws://127.0.0.1:53393/` 监听；替换内核后沿用该服务的 `ExecStart` 配置。
 
-不指定 `XTUNNEL_BINARY` 而重新运行安装脚本会再次下载上游内核。
+重新运行安装脚本会重新下载本项目已验证的产物；若只需替换内核，可以使用本节的原子替换命令。
 
