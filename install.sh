@@ -256,8 +256,13 @@ else
     chmod +x "$CLOUDFLARED_BIN"
     info "cloudflared 已安装到 ${CLOUDFLARED_BIN}"
 fi
-# 确认 cloudflared 路径
-CLOUDFLARED_BIN=$(command -v cloudflared)
+
+# 确认 cloudflared 路径（apt 包安装到 /usr/bin，systemd 服务也使用此路径）
+if command -v apt-get &>/dev/null; then
+    CLOUDFLARED_BIN="/usr/bin/cloudflared"
+else
+    CLOUDFLARED_BIN=$(command -v cloudflared)
+fi
 info "cloudflared 路径: ${CLOUDFLARED_BIN}"
 
 # ==================== Part 3: Configure cf-tunnel.service ====================
