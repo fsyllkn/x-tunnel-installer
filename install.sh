@@ -257,11 +257,15 @@ else
     info "cloudflared 已安装到 ${CLOUDFLARED_BIN}"
 fi
 
-# 确认 cloudflared 路径（apt 包安装到 /usr/bin，systemd 服务也使用此路径）
-if command -v apt-get &>/dev/null; then
-    CLOUDFLARED_BIN="/usr/bin/cloudflared"
-else
-    CLOUDFLARED_BIN=$(command -v cloudflared)
+# 检测 cloudflared 的实际可执行文件路径，供 systemd 服务使用
+if ! CLOUDFLARED_PATH=$(command -v cloudflared); then
+    error "安装后找不到 cloudflared 可执行文件，请检查软件包安装结果"
+    exit 1
+fi
+CLOUDFLARED_BIN=$(readlink -f "$CLOUDFLARED_PATH")
+if [[ ! -x "$CLOUDFLARED_BIN" ]]; then
+    error "cloudflared 文件不可执行: ${CLOUDFLARED_BIN}"
+    exit 1
 fi
 info "cloudflared 路径: ${CLOUDFLARED_BIN}"
 
@@ -295,7 +299,7 @@ Wants=network-online.target
 [Service]
 TimeoutStartSec=15
 Type=notify
-ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run --token ${CF_TOKEN}
+ExecStart="${CLOUDFLARED_BIN}" --no-autoupdate tunnel run --token ${CF_TOKEN}
 Restart=on-failure
 RestartSec=5s
 
