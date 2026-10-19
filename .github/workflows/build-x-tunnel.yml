@@ -98,7 +98,6 @@ jobs:
             gh release upload "$tag" x-tunnel-linux-{amd64,arm64}{,.sha256} --clobber
           else
             gh release create "$tag" x-tunnel-linux-{amd64,arm64}{,.sha256} \
-              --target d219c34fcdfc07c91b3563aadb078381cab8aaa5 \
               --title 'Verified x-tunnel build (d219c34)' \
               --notes 'Built from the repository source. Linux amd64 is byte-identical to the user-provided working binary.'
           fi
