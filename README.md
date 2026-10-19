@@ -13,7 +13,7 @@ bash <(curl -sL https://raw.githubusercontent.com/fsyllkn/x-tunnel-installer/mai
 
 - 🔍 自动检测系统架构（amd64/arm64/armv7/armv6 等）
 - 📦 从 [GitHub Releases](https://github.com/caichengle666/x-tunnel/releases) 拉取最新 x-tunnel 内核
-- ☁️ 自动安装 cloudflared（如未安装）
+- ☁️ Debian/Ubuntu 通过 Cloudflare 官方 APT 源安装或更新 cloudflared；其他系统使用官方二进制文件回退
 - ⚙️ 交互式配置两个 systemd 服务：
   - `cf-tunnel.service` — cloudflared tunnel
   - `cf-x-tunnel.service` — x-tunnel
