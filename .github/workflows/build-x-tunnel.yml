@@ -1,0 +1,73 @@
+name: Build x-tunnel
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'x-tunnel.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'build.sh'
+      - '.github/workflows/build-x-tunnel.yml'
+  pull_request:
+    paths:
+      - 'x-tunnel.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'build.sh'
+      - '.github/workflows/build-x-tunnel.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.0'
+          cache-dependency-path: go.sum
+      - name: Verify and build Linux binaries
+        run: |
+          go vet ./...
+          go test ./...
+          bash build.sh all
+          git diff --exit-code -- go.mod go.sum
+      - name: Smoke test amd64 binary
+        run: |
+          ./dist/x-tunnel-linux-amd64 -h > dist/help.txt 2>&1
+          grep -q -- '-token' dist/help.txt
+          python3 - <<'PY'
+          import socket, subprocess, time
+          with socket.socket() as sock:
+              sock.bind(('127.0.0.1', 0))
+              port = sock.getsockname()[1]
+          with open('dist/server-smoke.log', 'w') as log:
+              process = subprocess.Popen([
+                  './dist/x-tunnel-linux-amd64', '-l',
+                  f'wss://127.0.0.1:{port}', '-token', 'build-smoke-test'
+              ], stdout=log, stderr=subprocess.STDOUT)
+              try:
+                  for _ in range(100):
+                      if process.poll() is not None:
+                          raise RuntimeError('WSS server exited before listening')
+                      try:
+                          with socket.create_connection(('127.0.0.1', port), timeout=0.2):
+                              break
+                      except OSError:
+                          time.sleep(0.1)
+                  else:
+                      raise RuntimeError('WSS server did not listen within 10 seconds')
+              finally:
+                  process.terminate()
+                  process.wait(timeout=5)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: x-tunnel-linux-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30

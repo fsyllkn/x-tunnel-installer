@@ -76,3 +76,56 @@ systemctl daemon-reload
 - Linux（支持 systemd）
 - root 权限
 - curl 或 wget
+
+## 从本项目源码构建 x-tunnel
+
+仓库根目录的 `x-tunnel.go` 是用户提供并与可用 Linux amd64 内核核对过的源码，包含客户端和服务端。以此文件为后续构建依据，首次纳入时未修改源码逻辑。
+
+构建环境固定为 Go `1.26.0`、`CGO_ENABLED=0`；依赖固定在 `go.mod` / `go.sum`：
+
+| 依赖 | 版本 |
+|---|---|
+| github.com/google/uuid | v1.6.0 |
+| github.com/gorilla/websocket | v1.5.3 |
+| github.com/xtaci/smux | v1.5.57 |
+
+### 在 GitHub 网页构建
+
+1. 打开本仓库 **Actions → Build x-tunnel → Run workflow**。
+2. 等待构建成功，打开这次运行，下载页面底部的 `x-tunnel-linux-<提交 SHA>` 产物。
+3. 解压后选择 `x-tunnel-linux-amd64`（普通 x86 VPS）或 `x-tunnel-linux-arm64`（ARM64 VPS）。
+
+修改源码、依赖或构建文件并推送时，也会自动构建。产物保留 30 天，可随时重新运行。每个二进制附带 `.sha256` 和 `.buildinfo.txt`；CI 会检查代码、构建两种架构，并在 amd64 上验证帮助参数与 WSS 服务启动监听。此启动检查不代表已完成真实 Cloudflare 隧道端到端测试。
+
+### 在本地构建
+
+安装 Go 1.26.0，或安装支持自动下载工具链的 Go 1.21+；首次构建需能访问 Go 工具链与模块下载服务。
+
+```bash
+git clone https://github.com/fsyllkn/x-tunnel-installer.git
+cd x-tunnel-installer
+bash build.sh          # Linux amd64
+bash build.sh arm64    # Linux arm64
+bash build.sh all      # 同时构建两种架构
+```
+
+输出在 `dist/`。构建脚本使用 `-trimpath -buildvcs=false -ldflags='-s -w'`，不依赖系统 libc。它不向系统目录安装文件，也不启动服务。
+
+### 检查并替换已安装的内核
+
+在目标 VPS 上进入解压产物所在目录，以 amd64 为例：
+
+```bash
+sha256sum -c x-tunnel-linux-amd64.sha256
+chmod +x x-tunnel-linux-amd64
+./x-tunnel-linux-amd64 -h
+systemctl stop cf-x-tunnel.service
+install -m 0755 x-tunnel-linux-amd64 /usr/local/bin/x-tunnel
+systemctl start cf-x-tunnel.service
+systemctl status cf-x-tunnel.service --no-pager -l
+```
+
+ARM64 请将文件名改为 `x-tunnel-linux-arm64`。合并后的安装脚本默认在本机以 `ws://127.0.0.1:53393/tunnel` 监听；替换内核后沿用该服务的 `ExecStart` 配置。
+
+注意：`install.sh` 当前仍从 `caichengle666/x-tunnel` 的上游 Releases 下载内核；本次新增的是独立源码构建流程。重新运行安装脚本会再次下载上游内核。Actions 产物没有自动发布为 Releases，也没有自动部署到服务器。
+
