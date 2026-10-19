@@ -337,8 +337,8 @@ if ! [[ "$XTUNNEL_PORT" =~ ^[0-9]+$ ]] || [[ "$XTUNNEL_PORT" -lt 1 ]] || [[ "$XT
     XTUNNEL_PORT="$DEFAULT_PORT"
 fi
 
-# x-tunnel registers the WebSocket route and the status page separately.
-# A distinct path avoids a duplicate "/" route panic when the path is omitted.
+# When the Web GUI shares the tunnel port, it has already registered "/".
+# Use a distinct WebSocket path to avoid a duplicate ServeMux pattern panic.
 DEFAULT_PATH="/tunnel"
 echo ""
 echo -e "${BOLD}请输入 x-tunnel WebSocket 路径:${NC}"
