@@ -25,8 +25,21 @@ bash <(curl -sL https://raw.githubusercontent.com/fsyllkn/x-tunnel-installer/mai
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
 | cloudflared token | Tunnel 认证令牌 | 可跳过，稍后手动填写 |
-| x-tunnel 端口 | 监听端口 | `53393` |
+| x-tunnel 端口 | 本机监听端口 | `53393` |
+| x-tunnel WebSocket 路径 | WebSocket 接口路径，需与 Cloudflare 公网路由和客户端连接路径一致 | `/tunnel` |
 | x-tunnel 密码 | 认证密码 | 随机生成 24 位 |
+
+## Cloudflare Tunnel 配置
+
+安装脚本会让 x-tunnel 以普通 HTTP WebSocket（`ws://127.0.0.1`）监听本机回环地址；公网 TLS 由 Cloudflare 处理。Cloudflare Tunnel 的源站服务 URL 应填写：
+
+```text
+http://localhost:53393
+```
+
+Cloudflare 公网路由的路径、客户端连接 URL 的路径，必须与安装时填写的 x-tunnel WebSocket 路径一致。默认均为 `/tunnel`，例如客户端使用 `wss://你的域名/tunnel`。如果 Cloudflare 路由要继续使用 `/about`，安装时也把 x-tunnel 路径填为 `/about`，客户端路径也使用 `/about`。
+
+不要把本机源站 URL 配成 `https://localhost:53393`：该安装配置在本机使用明文 HTTP，只有公网入口使用 HTTPS。
 
 ## 常用命令
 
