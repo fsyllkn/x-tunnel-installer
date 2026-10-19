@@ -2,12 +2,12 @@
 #
 # ============================================================
 #  One-Click Installer — cloudflared + x-tunnel
-#  GitHub: https://github.com/caichengle666/x-tunnel
+#  GitHub: https://github.com/fsyllkn/x-tunnel-installer
 # ============================================================
 #  Usage:
-#    bash <(curl -sL https://raw.githubusercontent.com/<YOU>/install.sh)
+#    bash <(curl -fsSL https://raw.githubusercontent.com/fsyllkn/x-tunnel-installer/main/install.sh)
 #  or:
-#    wget -qO- https://raw.githubusercontent.com/<YOU>/install.sh | bash
+#    wget -qO- https://raw.githubusercontent.com/fsyllkn/x-tunnel-installer/main/install.sh | bash
 # ============================================================
 
 set -euo pipefail
@@ -36,6 +36,13 @@ if ! command -v systemctl &>/dev/null; then
     exit 1
 fi
 
+if [[ ! -r /dev/tty ]]; then
+    error "交互式安装需要终端，请在终端内运行脚本"
+    exit 1
+fi
+
+mkdir -p /usr/local/bin
+
 # -------------------- Architecture detection --------------------
 detect_arch() {
     local arch
@@ -61,14 +68,23 @@ detect_arch() {
 
 ARCH=$(detect_arch)
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+if [[ "$OS" != linux ]]; then
+    error "安装脚本仅支持 Linux"
+    exit 1
+fi
 info "检测到系统: ${OS}, 架构: ${ARCH}"
 
 # -------------------- Generate random password --------------------
 generate_password() {
-    # 24 chars, alphanumeric + special
-    tr -dc 'A-Za-z0-9_@#%&*+=' </dev/urandom | head -c 24 2>/dev/null || \
-    openssl rand -base64 18 2>/dev/null || \
-    date +%s%N | sha256sum | head -c 24
+    # 16 random bytes encoded as 32 safe hexadecimal characters.
+    if command -v od &>/dev/null; then
+        od -An -N16 -tx1 /dev/urandom | tr -d '[:space:]'
+    elif command -v openssl &>/dev/null; then
+        openssl rand -hex 16
+    else
+        error "需要 od 或 openssl 生成随机密码"
+        return 1
+    fi
 }
 
 # ==================== Part 1: Install x-tunnel ====================
@@ -77,123 +93,140 @@ header "第一步: 安装 x-tunnel 内核"
 XTUNNEL_BIN="/usr/local/bin/x-tunnel"
 RELEASE_API="https://api.github.com/repos/caichengle666/x-tunnel/releases/latest"
 
-info "正在从 GitHub 获取最新版本信息..."
-
-# Get latest release tag
-if command -v curl &>/dev/null; then
-    LATEST_JSON=$(curl -sL "$RELEASE_API")
-elif command -v wget &>/dev/null; then
-    LATEST_JSON=$(wget -qO- "$RELEASE_API")
-else
-    error "需要 curl 或 wget，请先安装"
-    exit 1
-fi
-
-LATEST_TAG=$(echo "$LATEST_JSON" | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/')
-
-if [[ -z "$LATEST_TAG" ]]; then
-    error "无法获取最新版本号，请检查网络或 GitHub API 限制"
-    echo "$LATEST_JSON" | head -20
-    exit 1
-fi
-
-info "最新版本: ${LATEST_TAG}"
-
-# Construct download URL — adapt the naming pattern to the actual release assets
-DOWNLOAD_URL=""
-ASSET_NAMES=(
-    "x-tunnel-${OS}-${ARCH}"
-    "x-tunnel_${OS}_${ARCH}"
-    "x-tunnel-${ARCH}"
-)
-
-# Parse all asset download URLs from the release
-ASSET_URLS=$(echo "$LATEST_JSON" | grep -o '"browser_download_url":\s*"[^"]*"' | sed 's/"browser_download_url":\s*"//;s/"$//')
-
-if [[ -z "$ASSET_URLS" ]]; then
-    error "未找到任何可下载的资源文件"
-    exit 1
-fi
-
-info "可用的资源文件:"
-echo "$ASSET_URLS" | while read -r url; do
-    echo "  - $(basename "$url")"
-done
-
-# Try to match architecture
-for name in "${ASSET_NAMES[@]}"; do
-    matched_url=$(echo "$ASSET_URLS" | grep -i "$name" | head -1 || true)
-    if [[ -n "$matched_url" ]]; then
-        DOWNLOAD_URL="$matched_url"
-        break
-    fi
-done
-
-# Fallback: try matching just the arch keyword
-if [[ -z "$DOWNLOAD_URL" ]]; then
-    matched_url=$(echo "$ASSET_URLS" | grep -i "${ARCH}" | grep -iv '\.sha\|\.md5\|\.sig\|\.txt' | head -1 || true)
-    if [[ -n "$matched_url" ]]; then
-        DOWNLOAD_URL="$matched_url"
-    fi
-fi
-
-if [[ -z "$DOWNLOAD_URL" ]]; then
-    error "未找到适配 ${OS}-${ARCH} 的二进制文件"
-    error "请手动下载: https://github.com/caichengle666/x-tunnel/releases/tag/${LATEST_TAG}"
-    exit 1
-fi
-
-FILENAME=$(basename "$DOWNLOAD_URL")
-info "即将下载: ${FILENAME}"
-info "下载地址: ${DOWNLOAD_URL}"
-
-# Download
-TMP_DIR=$(mktemp -d)
-TMP_FILE="${TMP_DIR}/${FILENAME}"
-
-if command -v curl &>/dev/null; then
-    curl -L --progress-bar -o "$TMP_FILE" "$DOWNLOAD_URL"
-else
-    wget --show-progress -O "$TMP_FILE" "$DOWNLOAD_URL"
-fi
-
-# Handle compressed files
-if [[ "$FILENAME" == *.tar.gz ]] || [[ "$FILENAME" == *.tgz ]]; then
-    info "解压 tar.gz 文件..."
-    tar -xzf "$TMP_FILE" -C "$TMP_DIR"
-    EXTRACTED_BIN=$(find "$TMP_DIR" -type f -name "x-tunnel*" ! -name "*.tar.gz" ! -name "*.tgz" | head -1)
-    if [[ -z "$EXTRACTED_BIN" ]]; then
-        EXTRACTED_BIN=$(find "$TMP_DIR" -type f -executable | head -1)
-    fi
-    if [[ -n "$EXTRACTED_BIN" ]]; then
-        mv "$EXTRACTED_BIN" "$XTUNNEL_BIN"
-    else
-        error "解压后未找到可执行文件"
+if [[ -n "${XTUNNEL_BINARY:-}" ]]; then
+    # Use a locally downloaded binary from this repository's verified build artifact.
+    if [[ ! -f "$XTUNNEL_BINARY" ]]; then
+        error "指定的 x-tunnel 二进制文件不存在: ${XTUNNEL_BINARY}"
         exit 1
     fi
-elif [[ "$FILENAME" == *.zip ]]; then
-    info "解压 zip 文件..."
-    unzip -o "$TMP_FILE" -d "$TMP_DIR" >/dev/null
-    EXTRACTED_BIN=$(find "$TMP_DIR" -type f -name "x-tunnel*" ! -name "*.zip" | head -1)
-    if [[ -z "$EXTRACTED_BIN" ]]; then
-        EXTRACTED_BIN=$(find "$TMP_DIR" -type f -executable | head -1)
-    fi
-    if [[ -n "$EXTRACTED_BIN" ]]; then
-        mv "$EXTRACTED_BIN" "$XTUNNEL_BIN"
+    EXTRACTED_BIN="$XTUNNEL_BINARY"
+    info "使用本地 x-tunnel 二进制文件: ${EXTRACTED_BIN}"
+else
+    info "正在从 GitHub 获取最新版本信息..."
+
+    # Get latest release tag
+    if command -v curl &>/dev/null; then
+        LATEST_JSON=$(curl -sL "$RELEASE_API")
+    elif command -v wget &>/dev/null; then
+        LATEST_JSON=$(wget -qO- "$RELEASE_API")
     else
-        error "解压后未找到可执行文件"
+        error "需要 curl 或 wget，请先安装"
         exit 1
     fi
-elif [[ "$FILENAME" == *.gz ]] && [[ "$FILENAME" != *.tar.gz ]]; then
-    info "解压 gz 文件..."
-    gunzip -c "$TMP_FILE" > "$XTUNNEL_BIN"
-else
-    # Assume raw binary
-    mv "$TMP_FILE" "$XTUNNEL_BIN"
+
+    LATEST_TAG=$(echo "$LATEST_JSON" | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/')
+
+    if [[ -z "$LATEST_TAG" ]]; then
+        error "无法获取最新版本号，请检查网络或 GitHub API 限制"
+        echo "$LATEST_JSON" | head -20
+        exit 1
+    fi
+
+    info "最新版本: ${LATEST_TAG}"
+
+    # Construct download URL — adapt the naming pattern to the actual release assets
+    DOWNLOAD_URL=""
+    ASSET_NAMES=(
+        "x-tunnel-${OS}-${ARCH}"
+        "x-tunnel_${OS}_${ARCH}"
+    )
+
+    # Parse all asset download URLs from the release
+    ASSET_URLS=$(echo "$LATEST_JSON" | grep -o '"browser_download_url":\s*"[^"]*"' | sed 's/"browser_download_url":\s*"//;s/"$//')
+
+    if [[ -z "$ASSET_URLS" ]]; then
+        error "未找到任何可下载的资源文件"
+        exit 1
+    fi
+
+    info "可用的资源文件:"
+    echo "$ASSET_URLS" | while read -r url; do
+        echo "  - $(basename "$url")"
+    done
+
+    # Try to match architecture
+    for name in "${ASSET_NAMES[@]}"; do
+        matched_url=$(echo "$ASSET_URLS" | grep -iF "$name" | grep -ivE '\.(sha[0-9]*|md5|sig|txt)([./]|$)' | head -1 || true)
+        if [[ -n "$matched_url" ]]; then
+            DOWNLOAD_URL="$matched_url"
+            break
+        fi
+    done
+
+    # Fallback: require both operating system and architecture.
+    if [[ -z "$DOWNLOAD_URL" ]]; then
+        matched_url=$(echo "$ASSET_URLS" | grep -iF "${OS}" | grep -iF "${ARCH}" | grep -ivE '\.(sha[0-9]*|md5|sig|txt)([./]|$)' | head -1 || true)
+        if [[ -n "$matched_url" ]]; then
+            DOWNLOAD_URL="$matched_url"
+        fi
+    fi
+
+    if [[ -z "$DOWNLOAD_URL" ]]; then
+        error "未找到适配 ${OS}-${ARCH} 的二进制文件"
+        error "请手动下载: https://github.com/caichengle666/x-tunnel/releases/tag/${LATEST_TAG}"
+        exit 1
+    fi
+
+    FILENAME=$(basename "$DOWNLOAD_URL")
+    info "即将下载: ${FILENAME}"
+    info "下载地址: ${DOWNLOAD_URL}"
+
+    # Download
+    TMP_DIR=$(mktemp -d)
+    trap 'rm -rf "$TMP_DIR"; if [[ -n "${STAGED_BIN:-}" ]]; then rm -f "$STAGED_BIN"; fi' EXIT
+    TMP_FILE="${TMP_DIR}/${FILENAME}"
+
+    if command -v curl &>/dev/null; then
+        curl -L --progress-bar -o "$TMP_FILE" "$DOWNLOAD_URL"
+    else
+        wget --show-progress -O "$TMP_FILE" "$DOWNLOAD_URL"
+    fi
+
+    # Handle compressed files
+    if [[ "$FILENAME" == *.tar.gz ]] || [[ "$FILENAME" == *.tgz ]]; then
+        info "解压 tar.gz 文件..."
+        tar -xzf "$TMP_FILE" -C "$TMP_DIR"
+        EXTRACTED_BIN=$(find "$TMP_DIR" -type f -name "x-tunnel*" ! -name "*.tar.gz" ! -name "*.tgz" | head -1)
+        if [[ -z "$EXTRACTED_BIN" ]]; then
+            EXTRACTED_BIN=$(find "$TMP_DIR" -type f -executable | head -1)
+        fi
+        if [[ -z "$EXTRACTED_BIN" ]]; then
+            error "解压后未找到可执行文件"
+            exit 1
+        fi
+    elif [[ "$FILENAME" == *.zip ]]; then
+        info "解压 zip 文件..."
+        unzip -o "$TMP_FILE" -d "$TMP_DIR" >/dev/null
+        EXTRACTED_BIN=$(find "$TMP_DIR" -type f -name "x-tunnel*" ! -name "*.zip" | head -1)
+        if [[ -z "$EXTRACTED_BIN" ]]; then
+            EXTRACTED_BIN=$(find "$TMP_DIR" -type f -executable | head -1)
+        fi
+        if [[ -z "$EXTRACTED_BIN" ]]; then
+            error "解压后未找到可执行文件"
+            exit 1
+        fi
+    elif [[ "$FILENAME" == *.gz ]] && [[ "$FILENAME" != *.tar.gz ]]; then
+        info "解压 gz 文件..."
+        EXTRACTED_BIN="${TMP_DIR}/x-tunnel-extracted"
+        gunzip -c "$TMP_FILE" > "$EXTRACTED_BIN"
+    else
+        # Assume raw binary
+        EXTRACTED_BIN="$TMP_FILE"
+    fi
 fi
 
-chmod +x "$XTUNNEL_BIN"
-rm -rf "$TMP_DIR"
+# Stage in the destination directory, then rename atomically even if the old binary is running.
+STAGED_BIN=$(mktemp "${XTUNNEL_BIN}.XXXXXXXX")
+install -m 0755 "$EXTRACTED_BIN" "$STAGED_BIN"
+if ! "$STAGED_BIN" -h >/dev/null 2>&1; then
+    error "x-tunnel 二进制文件无法在当前系统执行，原安装文件未替换"
+    exit 1
+fi
+mv -f -- "$STAGED_BIN" "$XTUNNEL_BIN"
+STAGED_BIN=""
+if [[ -n "${TMP_DIR:-}" ]]; then
+    rm -rf "$TMP_DIR"
+fi
 info "x-tunnel 已安装到 ${XTUNNEL_BIN}"
 
 # ==================== Part 2: Install cloudflared ====================
@@ -253,13 +286,22 @@ else
     CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CF_ARCH}"
     info "下载地址: ${CF_URL}"
 
+    CF_TMP_BIN=$(mktemp)
+
     if command -v curl &>/dev/null; then
-        curl -L --progress-bar -o "$CLOUDFLARED_BIN" "$CF_URL"
+        curl -fL --progress-bar -o "$CF_TMP_BIN" "$CF_URL"
     else
-        wget --show-progress -O "$CLOUDFLARED_BIN" "$CF_URL"
+        wget --show-progress -O "$CF_TMP_BIN" "$CF_URL"
     fi
 
-    chmod +x "$CLOUDFLARED_BIN"
+    CF_STAGED_BIN=$(mktemp "${CLOUDFLARED_BIN}.XXXXXXXX")
+    install -m 0755 "$CF_TMP_BIN" "$CF_STAGED_BIN"
+    rm -f "$CF_TMP_BIN"
+    if ! "$CF_STAGED_BIN" --version >/dev/null 2>&1; then
+        error "cloudflared 二进制文件无法在当前系统执行"
+        exit 1
+    fi
+    mv -f -- "$CF_STAGED_BIN" "$CLOUDFLARED_BIN"
     info "cloudflared 已安装到 ${CLOUDFLARED_BIN}"
 fi
 
@@ -285,7 +327,7 @@ echo -e "${BOLD}请输入 cloudflared tunnel token:${NC}"
 echo -e "${YELLOW}  (以 eyJ 开头的一长串字符)${NC}"
 echo -e "${YELLOW}  直接按回车可跳过，稍后手动编辑配置文件${NC}"
 echo ""
-read -rp "Token: " CF_TOKEN
+read -rp "Token: " CF_TOKEN </dev/tty || { error "无法从终端读取 Cloudflare token"; exit 1; }
 
 if [[ -z "$CF_TOKEN" ]]; then
     CF_TOKEN="YOUR_TOKEN_HERE"
@@ -293,6 +335,10 @@ if [[ -z "$CF_TOKEN" ]]; then
     warn "将 YOUR_TOKEN_HERE 替换为实际 token"
     NEED_MANUAL_CF=true
 else
+    if ! [[ "$CF_TOKEN" =~ ^[A-Za-z0-9._+/=-]+$ ]]; then
+        error "Cloudflare token 格式无效，请只输入 token，不要粘贴整条安装命令"
+        exit 1
+    fi
     NEED_MANUAL_CF=false
 fi
 
@@ -303,7 +349,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-TimeoutStartSec=15
+TimeoutStartSec=0
 Type=notify
 ExecStart="${CLOUDFLARED_BIN}" --no-autoupdate tunnel run --token ${CF_TOKEN}
 Restart=on-failure
@@ -325,7 +371,7 @@ echo ""
 echo -e "${BOLD}请输入 x-tunnel 监听端口:${NC}"
 echo -e "${YELLOW}  默认端口: ${DEFAULT_PORT}，直接按回车使用默认值${NC}"
 echo ""
-read -rp "端口 [${DEFAULT_PORT}]: " XTUNNEL_PORT
+read -rp "端口 [${DEFAULT_PORT}]: " XTUNNEL_PORT </dev/tty || { error "无法从终端读取端口"; exit 1; }
 
 if [[ -z "$XTUNNEL_PORT" ]]; then
     XTUNNEL_PORT="$DEFAULT_PORT"
@@ -344,7 +390,7 @@ echo ""
 echo -e "${BOLD}请输入 x-tunnel WebSocket 路径:${NC}"
 echo -e "${YELLOW}  默认路径: ${DEFAULT_PATH}，Cloudflare 路由路径需与此一致${NC}"
 echo ""
-read -rp "路径 [${DEFAULT_PATH}]: " XTUNNEL_PATH
+read -rp "路径 [${DEFAULT_PATH}]: " XTUNNEL_PATH </dev/tty || { error "无法从终端读取 WebSocket 路径"; exit 1; }
 
 if [[ -z "$XTUNNEL_PATH" ]]; then
     XTUNNEL_PATH="$DEFAULT_PATH"
@@ -361,13 +407,18 @@ echo ""
 echo -e "${BOLD}请输入 x-tunnel 认证密码 (token):${NC}"
 echo -e "${YELLOW}  直接按回车使用随机生成的安全密码${NC}"
 echo ""
-read -rp "密码 [随机生成]: " XTUNNEL_TOKEN
+read -rp "密码 [随机生成]: " XTUNNEL_TOKEN </dev/tty || { error "无法从终端读取认证密码"; exit 1; }
 
 RANDOM_GENERATED=false
 if [[ -z "$XTUNNEL_TOKEN" ]]; then
     XTUNNEL_TOKEN=$(generate_password)
     RANDOM_GENERATED=true
     info "已生成随机密码"
+fi
+
+if ! [[ "$XTUNNEL_TOKEN" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    error "x-tunnel 密码只能包含字母、数字、下划线和连字符（WebSocket 子协议格式限制）"
+    exit 1
 fi
 
 cat > "$XTUNNEL_SERVICE_FILE" <<EOF
@@ -395,15 +446,21 @@ header "第五步: 启用并启动服务"
 systemctl daemon-reload
 
 # Enable services
-systemctl enable cf-tunnel.service 2>/dev/null && info "cf-tunnel.service 已设为开机自启" || warn "cf-tunnel.service 设置开机自启失败"
+if [[ "$NEED_MANUAL_CF" == false ]]; then
+    systemctl enable cf-tunnel.service 2>/dev/null && info "cf-tunnel.service 已设为开机自启" || warn "cf-tunnel.service 设置开机自启失败"
+else
+    systemctl stop cf-tunnel.service 2>/dev/null || true
+    systemctl disable cf-tunnel.service 2>/dev/null || true
+    warn "未设置 Cloudflare token，cf-tunnel.service 已停止且未启用开机自启"
+fi
 systemctl enable cf-x-tunnel.service 2>/dev/null && info "cf-x-tunnel.service 已设为开机自启" || warn "cf-x-tunnel.service 设置开机自启失败"
 
 # Start cf-x-tunnel (always start since it has a valid config)
-systemctl start cf-x-tunnel.service && info "cf-x-tunnel.service 已启动" || warn "cf-x-tunnel.service 启动失败，请检查配置"
+systemctl restart cf-x-tunnel.service && info "cf-x-tunnel.service 已启动" || warn "cf-x-tunnel.service 启动失败，请检查配置"
 
 # Start cf-tunnel only if token was provided
 if [[ "$NEED_MANUAL_CF" == false ]]; then
-    systemctl start cf-tunnel.service && info "cf-tunnel.service 已启动" || warn "cf-tunnel.service 启动失败，请检查 token 是否正确"
+    systemctl restart cf-tunnel.service && info "cf-tunnel.service 已启动" || warn "cf-tunnel.service 启动失败，请检查 token 是否正确"
 else
     warn "cf-tunnel.service 未启动 (token 未设置)"
 fi
@@ -419,12 +476,12 @@ echo -e "  ${GREEN}●${NC} cloudflared:    ${CLOUDFLARED_BIN}"
 echo -e "  ${GREEN}●${NC} x-tunnel:       ${XTUNNEL_BIN}"
 echo ""
 echo -e "${BOLD}  服务状态:${NC}"
-echo -e "  ├─ cf-tunnel.service      $(systemctl is-active cf-tunnel.service 2>/dev/null || echo 'inactive')"
-echo -e "  └─ cf-x-tunnel.service    $(systemctl is-active cf-x-tunnel.service 2>/dev/null || echo 'inactive')"
+echo -e "  ├─ cf-tunnel.service      $(systemctl is-active cf-tunnel.service 2>/dev/null || true)"
+echo -e "  └─ cf-x-tunnel.service    $(systemctl is-active cf-x-tunnel.service 2>/dev/null || true)"
 echo ""
 echo -e "${BOLD}  x-tunnel 配置:${NC}"
 echo -e "  ├─ 监听地址:  ${XTUNNEL_LISTEN_ADDR}"
-echo -e "  ├─ Cloudflare 源站 URL: http://localhost:${XTUNNEL_PORT}"
+echo -e "  ├─ Cloudflare 源站 URL: http://127.0.0.1:${XTUNNEL_PORT}"
 echo -e "  ├─ Cloudflare 公网路径: ${XTUNNEL_PATH}"
 echo -e "  └─ 认证密码:  ${CYAN}${BOLD}${XTUNNEL_TOKEN}${NC}"
 if [[ "$RANDOM_GENERATED" == true ]]; then
@@ -450,7 +507,7 @@ if [[ "$NEED_MANUAL_CF" == true ]]; then
     echo ""
     echo -e "  2. 重新加载并启动服务:"
     echo -e "     ${CYAN}systemctl daemon-reload${NC}"
-    echo -e "     ${CYAN}systemctl restart cf-tunnel.service${NC}"
+    echo -e "     ${CYAN}systemctl enable --now cf-tunnel.service${NC}"
     echo ""
 fi
 

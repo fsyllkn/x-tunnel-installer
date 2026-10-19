@@ -1,12 +1,11 @@
 # x-tunnel-installer
-# x-tunnel-installer
 
 一键安装 cloudflared + x-tunnel 的自动化脚本。
 
 ## 快速使用
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/fsyllkn/x-tunnel-installer/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/fsyllkn/x-tunnel-installer/main/install.sh)
 ```
 
 ## 功能
@@ -17,8 +16,8 @@ bash <(curl -sL https://raw.githubusercontent.com/fsyllkn/x-tunnel-installer/mai
 - ⚙️ 交互式配置两个 systemd 服务：
   - `cf-tunnel.service` — cloudflared tunnel
   - `cf-x-tunnel.service` — x-tunnel
-- 🔐 支持随机密码生成
-- 🚀 自动启用开机自启并启动服务
+- 🔐 生成 32 位十六进制随机密码；手动输入密码仅允许字母、数字、`_` 和 `-`
+- 🚀 启用并启动已配置的服务；未提供 Cloudflare token 时不会启用隧道服务
 
 ## 交互配置项
 
@@ -27,19 +26,19 @@ bash <(curl -sL https://raw.githubusercontent.com/fsyllkn/x-tunnel-installer/mai
 | cloudflared token | Tunnel 认证令牌 | 可跳过，稍后手动填写 |
 | x-tunnel 端口 | 本机监听端口 | `53393` |
 | x-tunnel WebSocket 路径 | WebSocket 接口路径，需与 Cloudflare 公网路由和客户端连接路径一致 | `/tunnel` |
-| x-tunnel 密码 | 认证密码 | 随机生成 24 位 |
+| x-tunnel 密码 | 认证密码 | 随机生成 32 位十六进制字符 |
 
 ## Cloudflare Tunnel 配置
 
 安装脚本会让 x-tunnel 以普通 HTTP WebSocket（`ws://127.0.0.1`）监听本机回环地址；公网 TLS 由 Cloudflare 处理。Cloudflare Tunnel 的源站服务 URL 应填写：
 
 ```text
-http://localhost:53393
+http://127.0.0.1:53393
 ```
 
 Cloudflare 公网路由的路径、客户端连接 URL 的路径，必须与安装时填写的 x-tunnel WebSocket 路径一致。默认均为 `/tunnel`，例如客户端使用 `wss://你的域名/tunnel`。如果 Cloudflare 路由要继续使用 `/about`，安装时也把 x-tunnel 路径填为 `/about`，客户端路径也使用 `/about`。
 
-不要把本机源站 URL 配成 `https://localhost:53393`：该安装配置在本机使用明文 HTTP，只有公网入口使用 HTTPS。
+不要把本机源站 URL 配成 `https://127.0.0.1:53393`：该安装配置在本机使用明文 HTTP，只有公网入口使用 HTTPS。
 
 ## 常用命令
 
@@ -76,6 +75,7 @@ systemctl daemon-reload
 - Linux（支持 systemd）
 - root 权限
 - curl 或 wget
+- 可交互的终端（脚本使用 `/dev/tty` 读取配置）
 
 ## 从本项目源码构建 x-tunnel
 
@@ -111,7 +111,18 @@ bash build.sh all      # 同时构建两种架构
 
 输出在 `dist/`。构建脚本使用 `-trimpath -buildvcs=false -ldflags='-s -w'`，不依赖系统 libc。它不向系统目录安装文件，也不启动服务。
 
-### 检查并替换已安装的内核
+### 使用已验证的构建产物安装
+
+从 Actions 下载并解压本仓库的构建产物，在目标 VPS 上进入解压目录，以 amd64 为例：
+
+```bash
+sha256sum -c x-tunnel-linux-amd64.sha256
+XTUNNEL_BINARY="$(pwd)/x-tunnel-linux-amd64" bash <(curl -fsSL https://raw.githubusercontent.com/fsyllkn/x-tunnel-installer/main/install.sh)
+```
+
+安装脚本会先验证指定二进制可执行，再原子替换已安装文件。ARM64 请将文件名改为 `x-tunnel-linux-arm64`。若不指定 `XTUNNEL_BINARY`，脚本仍下载上游 `caichengle666/x-tunnel` 的最新 Release；该上游版本在此前的 VPS 测试中无法启动，不应与本仓库构建产物混淆。Actions 产物没有自动发布为 Releases。
+
+### 仅替换已安装的内核
 
 在目标 VPS 上进入解压产物所在目录，以 amd64 为例：
 
@@ -119,13 +130,14 @@ bash build.sh all      # 同时构建两种架构
 sha256sum -c x-tunnel-linux-amd64.sha256
 chmod +x x-tunnel-linux-amd64
 ./x-tunnel-linux-amd64 -h
-systemctl stop cf-x-tunnel.service
-install -m 0755 x-tunnel-linux-amd64 /usr/local/bin/x-tunnel
-systemctl start cf-x-tunnel.service
+STAGED_BIN=$(mktemp /usr/local/bin/x-tunnel.XXXXXXXX)
+install -m 0755 x-tunnel-linux-amd64 "$STAGED_BIN"
+mv -f "$STAGED_BIN" /usr/local/bin/x-tunnel
+systemctl restart cf-x-tunnel.service
 systemctl status cf-x-tunnel.service --no-pager -l
 ```
 
 ARM64 请将文件名改为 `x-tunnel-linux-arm64`。合并后的安装脚本默认在本机以 `ws://127.0.0.1:53393/tunnel` 监听；替换内核后沿用该服务的 `ExecStart` 配置。
 
-注意：`install.sh` 当前仍从 `caichengle666/x-tunnel` 的上游 Releases 下载内核；本次新增的是独立源码构建流程。重新运行安装脚本会再次下载上游内核。Actions 产物没有自动发布为 Releases，也没有自动部署到服务器。
+不指定 `XTUNNEL_BINARY` 而重新运行安装脚本会再次下载上游内核。
 
