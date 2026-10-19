@@ -337,6 +337,26 @@ if ! [[ "$XTUNNEL_PORT" =~ ^[0-9]+$ ]] || [[ "$XTUNNEL_PORT" -lt 1 ]] || [[ "$XT
     XTUNNEL_PORT="$DEFAULT_PORT"
 fi
 
+# x-tunnel registers the WebSocket route and the status page separately.
+# A distinct path avoids a duplicate "/" route panic when the path is omitted.
+DEFAULT_PATH="/tunnel"
+echo ""
+echo -e "${BOLD}请输入 x-tunnel WebSocket 路径:${NC}"
+echo -e "${YELLOW}  默认路径: ${DEFAULT_PATH}，Cloudflare 路由路径需与此一致${NC}"
+echo ""
+read -rp "路径 [${DEFAULT_PATH}]: " XTUNNEL_PATH
+
+if [[ -z "$XTUNNEL_PATH" ]]; then
+    XTUNNEL_PATH="$DEFAULT_PATH"
+fi
+
+if ! [[ "$XTUNNEL_PATH" =~ ^(/[A-Za-z0-9._~-]+)+$ ]]; then
+    warn "路径格式无效，将使用默认路径 ${DEFAULT_PATH}"
+    XTUNNEL_PATH="$DEFAULT_PATH"
+fi
+
+XTUNNEL_LISTEN_ADDR="ws://127.0.0.1:${XTUNNEL_PORT}${XTUNNEL_PATH}"
+
 echo ""
 echo -e "${BOLD}请输入 x-tunnel 认证密码 (token):${NC}"
 echo -e "${YELLOW}  直接按回车使用随机生成的安全密码${NC}"
@@ -358,7 +378,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/x-tunnel -l wss://0.0.0.0:${XTUNNEL_PORT} -token ${XTUNNEL_TOKEN}
+ExecStart=${XTUNNEL_BIN} -l ${XTUNNEL_LISTEN_ADDR} -token ${XTUNNEL_TOKEN}
 Restart=always
 RestartSec=3
 User=root
@@ -403,7 +423,9 @@ echo -e "  ├─ cf-tunnel.service      $(systemctl is-active cf-tunnel.service
 echo -e "  └─ cf-x-tunnel.service    $(systemctl is-active cf-x-tunnel.service 2>/dev/null || echo 'inactive')"
 echo ""
 echo -e "${BOLD}  x-tunnel 配置:${NC}"
-echo -e "  ├─ 监听地址:  wss://0.0.0.0:${XTUNNEL_PORT}"
+echo -e "  ├─ 监听地址:  ${XTUNNEL_LISTEN_ADDR}"
+echo -e "  ├─ Cloudflare 源站 URL: http://localhost:${XTUNNEL_PORT}"
+echo -e "  ├─ Cloudflare 公网路径: ${XTUNNEL_PATH}"
 echo -e "  └─ 认证密码:  ${CYAN}${BOLD}${XTUNNEL_TOKEN}${NC}"
 if [[ "$RANDOM_GENERATED" == true ]]; then
     echo ""
