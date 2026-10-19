@@ -223,7 +223,13 @@ if command -v apt-get &>/dev/null; then
     info "Cloudflare 官方 apt 源已添加"
 
     apt-get update -qq
-    apt-get install -y cloudflared
+    CLOUDFLARED_PACKAGE_BIN=$(dpkg-query -L cloudflared 2>/dev/null | grep -m1 -E '/(s?bin)/cloudflared$' || true)
+    if [[ -n "$CLOUDFLARED_PACKAGE_BIN" && ! -x "$CLOUDFLARED_PACKAGE_BIN" ]]; then
+        warn "APT 记录 cloudflared 已安装，但包内可执行文件缺失或不可执行，正在修复..."
+        apt-get install --reinstall -y cloudflared
+    else
+        apt-get install -y cloudflared
+    fi
     info "cloudflared 已通过 Cloudflare 官方 apt 源安装完成（后续可通过 apt upgrade 更新）"
 elif command -v cloudflared &>/dev/null; then
     # Non-apt Linux systems may already have cloudflared installed.
